@@ -1,0 +1,29 @@
+# Dependencias
+node_modules/
+
+# Builds y reportes
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+
+# Variables de entorno (solo se versiona .env.example)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor y sistema
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Archivos temporales de Office
+~$*
