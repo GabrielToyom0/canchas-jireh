@@ -1,2 +1,4 @@
-# La aprobación del Owner es obligatoria en todo PR hacia main.
-*    @GabrielToyom0
+# Todo PR hacia main necesita la aprobación de un Code Owner.
+# MazaJP también es Code Owner para que los PR de Gabriel tengan quién los apruebe
+# (GitHub no deja que el autor apruebe su propio PR).
+*    @GabrielToyom0 @MazaJP
