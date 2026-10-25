@@ -1,0 +1,247 @@
+// Canchas Jireh → una sola base de datos (CanchasJirehDB) con llaves foráneas reales.
+// La migración "reglas_de_integridad" agrega restricciones CHECK, un índice filtrado
+// y el trigger que impide reservas traslapadas (RNF-02).
+//
+// SQL Server rechaza varias rutas de cascada hacia una misma tabla, así que las relaciones
+// usan NoAction; solo RefreshToken, Tarifa y Bloqueo se borran en cascada con su padre.
+// El sistema desactiva (activa/activo = false) en lugar de borrar sedes, canchas y usuarios.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "sqlserver"
+}
+
+// ── Usuarios y sesiones (RF-01, RF-02) ───────────────────────────────────
+
+model Usuario {
+  id               String         @id @default(uuid()) @db.UniqueIdentifier
+  nombre           String         @db.NVarChar(100)
+  correo           String         @unique @db.NVarChar(150)
+  telefono         String         @db.NVarChar(20)
+  passwordHash     String         @db.NVarChar(100)
+  /// CLIENTE | ADMIN_SEDE | PROPIETARIO
+  rol              String         @default("CLIENTE") @db.NVarChar(20)
+  /// Solo administradores de sede (RN-07)
+  sedeId           String?        @db.UniqueIdentifier
+  activo           Boolean        @default(true)
+  creadoEn         DateTime       @default(now())
+  sede             Sede?          @relation(fields: [sedeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  refreshTokens    RefreshToken[]
+  reservas         Reserva[]
+  pagos            Pago[]         @relation("PagoCliente")
+  pagosVerificados Pago[]         @relation("PagoVerificador")
+  bloqueos         Bloqueo[]
+  notificaciones   Notificacion[]
+
+  @@index([rol])
+}
+
+model RefreshToken {
+  id            String    @id @default(uuid()) @db.UniqueIdentifier
+  usuarioId     String    @db.UniqueIdentifier
+  /// SHA-256 del token: el token en claro nunca se guarda
+  tokenHash     String    @unique @db.Char(64)
+  expiraEn      DateTime
+  revocado      Boolean   @default(false)
+  /// Momento en que se rotó: permite un breve margen de reutilización (pestañas simultáneas)
+  reemplazadoEn DateTime?
+  creadoEn      DateTime  @default(now())
+  usuario       Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([usuarioId])
+}
+
+// ── Catálogo (RF-03 a RF-06) ─────────────────────────────────────────────
+
+model Sede {
+  id              String                @id @default(uuid()) @db.UniqueIdentifier
+  nombre          String                @unique @db.NVarChar(100)
+  direccion       String                @db.NVarChar(200)
+  zona            String                @db.NVarChar(50)
+  telefono        String                @db.NVarChar(20)
+  /// Hora local de Guatemala, formato HH:mm
+  horaApertura    String                @db.Char(5)
+  horaCierre      String                @db.Char(5)
+  activa          Boolean               @default(true)
+  creadoEn        DateTime              @default(now())
+  canchas         Cancha[]
+  administradores Usuario[]
+  reservas        Reserva[]
+  politicas       PoliticaCancelacion[]
+}
+
+model Cancha {
+  id         String    @id @default(uuid()) @db.UniqueIdentifier
+  sedeId     String    @db.UniqueIdentifier
+  nombre     String    @db.NVarChar(100)
+  /// FUTBOL | BASQUETBOL | VOLEIBOL
+  deporte    String    @db.NVarChar(20)
+  superficie String    @db.NVarChar(50)
+  capacidad  Int
+  activa     Boolean   @default(true)
+  creadoEn   DateTime  @default(now())
+  sede       Sede      @relation(fields: [sedeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tarifas    Tarifa[]
+  bloqueos   Bloqueo[]
+  reservas   Reserva[]
+
+  @@unique([sedeId, nombre])
+  @@index([sedeId, deporte])
+}
+
+model Tarifa {
+  id           String    @id @default(uuid()) @db.UniqueIdentifier
+  canchaId     String    @db.UniqueIdentifier
+  /// ENTRE_SEMANA | FIN_DE_SEMANA
+  tipoDia      String    @db.NVarChar(20)
+  /// Franja horaria local HH:mm, fin exclusivo
+  horaInicio   String    @db.Char(5)
+  horaFin      String    @db.Char(5)
+  precioHora   Decimal   @db.Decimal(10, 2)
+  vigenteDesde DateTime  @db.Date
+  vigenteHasta DateTime? @db.Date
+  creadoEn     DateTime  @default(now())
+  cancha       Cancha    @relation(fields: [canchaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([canchaId, tipoDia])
+}
+
+model Bloqueo {
+  id        String   @id @default(uuid()) @db.UniqueIdentifier
+  canchaId  String   @db.UniqueIdentifier
+  /// Instantes en UTC
+  inicio    DateTime
+  fin       DateTime
+  motivo    String   @db.NVarChar(200)
+  creadoPor String   @db.UniqueIdentifier
+  creadoEn  DateTime @default(now())
+  cancha    Cancha   @relation(fields: [canchaId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  autor     Usuario  @relation(fields: [creadoPor], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([canchaId, inicio, fin])
+}
+
+// ── Reservas (RF-07 a RF-13) ─────────────────────────────────────────────
+
+model Reserva {
+  id                  String         @id @default(uuid()) @db.UniqueIdentifier
+  usuarioId           String         @db.UniqueIdentifier
+  canchaId            String         @db.UniqueIdentifier
+  /// Sede de la cancha: permite filtrar por sede y validar RN-07 sin otra consulta
+  sedeId              String         @db.UniqueIdentifier
+  /// Instantes en UTC
+  inicio              DateTime
+  fin                 DateTime
+  /// PENDIENTE | CONFIRMADA | COMPLETADA | CANCELADA | EXPIRADA | NO_SE_PRESENTO
+  estado              String         @default("PENDIENTE") @db.NVarChar(20)
+  /// RN-05: precio fijado al crear la reserva
+  precioTotal         Decimal        @db.Decimal(10, 2)
+  /// RN-04: null mientras hay un pago en verificación
+  expiraEn            DateTime?
+  canceladaEn         DateTime?
+  motivoCancelacion   String?        @db.NVarChar(200)
+  porcentajeReembolso Int?
+  recordatorioEnviado Boolean        @default(false)
+  creadoEn            DateTime       @default(now())
+  actualizadoEn       DateTime       @updatedAt
+  usuario             Usuario        @relation(fields: [usuarioId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cancha              Cancha         @relation(fields: [canchaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sede                Sede           @relation(fields: [sedeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  pagos               Pago[]
+  notificaciones      Notificacion[]
+
+  @@index([canchaId, inicio, fin])
+  @@index([usuarioId, inicio])
+  @@index([sedeId, inicio])
+  @@index([estado, expiraEn])
+}
+
+/// RN-06: porcentaje de reembolso según las horas de anticipación, por sede.
+model PoliticaCancelacion {
+  id                  String @id @default(uuid()) @db.UniqueIdentifier
+  sedeId              String @db.UniqueIdentifier
+  horasAntes          Int
+  porcentajeReembolso Int
+  sede                Sede   @relation(fields: [sedeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([sedeId, horasAntes])
+}
+
+// ── Pagos (RF-14, RN-08) ─────────────────────────────────────────────────
+
+model Pago {
+  id              String      @id @default(uuid()) @db.UniqueIdentifier
+  reservaId       String      @db.UniqueIdentifier
+  usuarioId       String      @db.UniqueIdentifier
+  monto           Decimal     @db.Decimal(10, 2)
+  /// TARJETA_SIMULADA | TRANSFERENCIA | EFECTIVO
+  metodo          String      @db.NVarChar(20)
+  /// PENDIENTE | CONFIRMADO | RECHAZADO | REEMBOLSADO
+  estado          String      @default("PENDIENTE") @db.NVarChar(20)
+  /// Nombre del archivo del comprobante (transferencias)
+  comprobanteUrl  String?     @db.NVarChar(200)
+  referenciaBanco String?     @db.NVarChar(50)
+  /// Últimos 4 dígitos de la tarjeta simulada; nunca se guarda el número completo
+  ultimos4        String?     @db.Char(4)
+  motivoRechazo   String?     @db.NVarChar(200)
+  verificadoPor   String?     @db.UniqueIdentifier
+  verificadoEn    DateTime?
+  confirmadoEn    DateTime?
+  creadoEn        DateTime    @default(now())
+  actualizadoEn   DateTime    @updatedAt
+  reserva         Reserva     @relation(fields: [reservaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  usuario         Usuario     @relation("PagoCliente", fields: [usuarioId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  verificador     Usuario?    @relation("PagoVerificador", fields: [verificadoPor], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reembolsos      Reembolso[]
+
+  @@index([reservaId])
+  @@index([usuarioId, creadoEn])
+  @@index([estado])
+}
+
+model Reembolso {
+  id         String   @id @default(uuid()) @db.UniqueIdentifier
+  /// Un reembolso por pago: procesar dos veces la misma cancelación no reembolsa doble
+  pagoId     String   @unique @db.UniqueIdentifier
+  monto      Decimal  @db.Decimal(10, 2)
+  porcentaje Int
+  motivo     String   @db.NVarChar(200)
+  creadoEn   DateTime @default(now())
+  pago       Pago     @relation(fields: [pagoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ── Notificaciones (RF-15, HU-05) ────────────────────────────────────────
+
+/// También funciona como cola: se inserta PENDIENTE en la misma transacción
+/// que el cambio de la reserva, y el programador la envía después.
+model Notificacion {
+  id           String    @id @default(uuid()) @db.UniqueIdentifier
+  usuarioId    String    @db.UniqueIdentifier
+  reservaId    String    @db.UniqueIdentifier
+  /// RESERVA_CONFIRMADA | RESERVA_CANCELADA | RESERVA_EXPIRADA | RESERVA_RECORDATORIO | PAGO_REEMBOLSADO
+  tipo         String    @db.NVarChar(30)
+  canal        String    @default("EMAIL") @db.NVarChar(20)
+  destinatario String    @db.NVarChar(150)
+  asunto       String    @db.NVarChar(200)
+  cuerpoHtml   String    @db.NVarChar(Max)
+  cuerpoTexto  String    @db.NVarChar(Max)
+  /// PENDIENTE | ENVIADA | FALLIDA
+  estado       String    @default("PENDIENTE") @db.NVarChar(20)
+  error        String?   @db.NVarChar(500)
+  intentos     Int       @default(0)
+  enviadaEn    DateTime?
+  creadoEn     DateTime  @default(now())
+  usuario      Usuario   @relation(fields: [usuarioId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reserva      Reserva   @relation(fields: [reservaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// El mismo aviso de una reserva nunca se envía dos veces
+  @@unique([reservaId, tipo])
+  @@index([estado, creadoEn])
+  @@index([usuarioId, creadoEn])
+}
