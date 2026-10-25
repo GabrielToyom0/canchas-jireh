@@ -6,13 +6,10 @@ Refs: HU-__ · RF-__
 
 -
 
-## Servicio(s) afectado(s)
+## Capa(s) afectada(s)
 
-- [ ] gateway  
-- [ ] auth  
-- [ ] catalog  
-- [ ] booking  
-- [ ] payment  
-- [ ] notification  
-- [ ] web  
-- [ ] infra/ci
+- [ ] backend: routes / controllers  
+- [ ] backend: services / reglas  
+- [ ] backend: repositories / prisma  
+- [ ] frontend  
+- [ ] infra / ci / docs
