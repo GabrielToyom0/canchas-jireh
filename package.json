@@ -1,0 +1,47 @@
+{
+  "name": "canchas-jireh",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend",
+    "e2e"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "preparar": "npm run db:generate -w backend",
+    "dev": "npm run preparar && concurrently -k -n api,web -c auto \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "dev:infra": "docker compose up -d sqlserver sqlserver-init mailpit",
+    "db:migrate": "npm run db:migrate -w backend",
+    "db:seed": "npm run db:seed -w backend",
+    "lint": "eslint . && npm run lint -w frontend",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "npm run preparar && npm run typecheck --workspaces --if-present",
+    "test": "npm run preparar && npm run test -w backend && npm run test -w frontend",
+    "test:integracion": "npm run preparar && npm run test:integracion -w backend",
+    "test:e2e": "npm run e2e -w e2e",
+    "build": "npm run preparar && npm run build -w backend && npm run build -w frontend",
+    "docker:up": "docker compose --profile app up -d --build",
+    "docker:down": "docker compose --profile app down"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "prisma@7.10.1": true,
+    "@prisma/engines@7.10.1": true
+  }
+}

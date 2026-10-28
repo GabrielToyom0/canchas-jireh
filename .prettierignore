@@ -1,0 +1,16 @@
+node_modules
+**/dist
+**/generated
+**/coverage
+**/uploads
+**/migrations
+package-lock.json
+e2e/test-results
+e2e/playwright-report
+*.docx
+
+# Documentos de planificación que no forman parte del código
+Plan_*.html
+
+# Plantilla mantenida a mano por el Owner
+.github/pull_request_template.md
