@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,35 +15,102 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # El nombre del job ("verificar") es el check obligatorio en la regla de main.
+  # Check obligatorio de la regla de main: ningún PR se fusiona si falla.
   verificar:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-
-      # Los pasos de npm se activan solos cuando exista package-lock.json en la raíz.
+          cache: npm
       - name: Instalar dependencias
-        if: hashFiles('package-lock.json') != ''
         run: npm ci
-      - name: Lint
-        if: hashFiles('package-lock.json') != ''
-        run: npm run lint --if-present
-      - name: Typecheck
-        if: hashFiles('package-lock.json') != ''
-        run: npm run typecheck --if-present
-      - name: Pruebas
-        if: hashFiles('package-lock.json') != ''
-        run: npm run test --if-present
-      - name: Build
-        if: hashFiles('package-lock.json') != ''
-        run: npm run build --if-present
-      - name: Dependencias sin vulnerabilidades altas
-        if: hashFiles('package-lock.json') != ''
+      - name: Formato (Prettier)
+        run: npm run format:check
+      - name: Lint (ESLint)
+        run: npm run lint
+      - name: Tipos (TypeScript)
+        run: npm run typecheck
+      - name: Pruebas unitarias y de API (Vitest + Supertest + Testing Library)
+        run: npm test
+      - name: Compilación
+        run: npm run build
+      - name: Dependencias sin vulnerabilidades altas (OWASP A06)
         run: npm audit --omit=dev --audit-level=high
+      - name: docker-compose válido
+        run: docker compose --env-file .env.example --profile app config --quiet
+      - name: Imagen Docker
+        run: docker build -t canchas-jireh:ci .
 
-      - name: docker-compose.yml válido
-        if: hashFiles('docker-compose.yml') != ''
-        run: docker compose --env-file .env.example config --quiet
+  # RNF-02: la garantía contra traslapes se prueba contra SQL Server real.
+  integracion-bd:
+    needs: verificar
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Prueba_CI_2026!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Prueba_CI_2026!' -Q 'SELECT 1' -b"
+          --health-interval 10s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL_PRUEBAS: sqlserver://localhost:1433;database=CanchasJirehPruebasDB;user=sa;password=Prueba_CI_2026!;trustServerCertificate=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Pruebas de integración con base de datos
+        run: npm run test:integracion
+
+  # Flujos completos en el navegador sobre el sistema en contenedores (manual o con PROYECTO_COMPLETO=true).
+  e2e:
+    needs: verificar
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.PROYECTO_COMPLETO == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LIMITE_AUTH: '1000'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Levantar el sistema completo
+        run: |
+          cp .env.example .env
+          docker compose --profile app up -d --build
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/api/health && break
+            sleep 5
+          done
+          curl -sf http://localhost:8080/api/health
+      - name: Datos de demostración
+        run: docker compose exec -T app node dist/prisma/seed.js
+      - name: Instalar Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Pruebas E2E (Playwright + axe)
+        run: npm run test:e2e
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          CI: 'true'
+      - name: Registros de los contenedores
+        if: failure()
+        run: docker compose --profile app logs --tail 200
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: reporte-playwright
+          path: e2e/playwright-report
+          retention-days: 7
