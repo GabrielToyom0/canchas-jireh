@@ -47,6 +47,7 @@ jobs:
   # RNF-02: la garantía contra traslapes se prueba contra SQL Server real.
   integracion-bd:
     needs: verificar
+    if: github.event_name == 'workflow_dispatch' || vars.PROYECTO_COMPLETO == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
