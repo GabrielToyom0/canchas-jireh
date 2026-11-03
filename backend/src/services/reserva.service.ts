@@ -35,7 +35,7 @@ export const reservaService = {
   /**
    * HU-03 / RF-08 / RF-09: crea una reserva PENDIENTE con el precio calculado.
    * La garantía contra traslapes vive en la base de datos (RNF-02):
-   * - transacción SERIALIZABLE con UPDLOCK + HOLDLOCK sobre el rango de la cancha, y
+   * - transacción SERIALIZABLE que bloquea la cancha y luego su rango con UPDLOCK + HOLDLOCK, y
    * - un trigger que rechaza cualquier traslape aunque otro código inserte directo.
    */
   async crear(usuario: UsuarioToken, datos: NuevaReserva): Promise<ReservaConDetalle> {
@@ -63,6 +63,7 @@ export const reservaService = {
     try {
       return await prisma.$transaction(
         async (tx) => {
+          await reservaRepository.bloquearCancha(cancha.id, tx);
           if ((await reservaRepository.contarActivasConBloqueo(cancha.id, inicio, fin, tx)) > 0) {
             throw conflicto('El horario ya fue reservado', 'HORARIO_OCUPADO');
           }

@@ -14,6 +14,14 @@ export const reservaRepository = {
   buscarPorId: (id: string, db: Db = prisma) => db.reserva.findUnique({ where: { id }, include: detalleReserva }),
 
   /**
+   * Las solicitudes de una misma cancha hacen fila aquí. Sin este candado, varias revisan
+   * el rango a la vez y se bloquean entre sí al insertar (deadlock), lo que las hace esperar segundos.
+   */
+  bloquearCancha: async (canchaId: string, tx: Prisma.TransactionClient) => {
+    await tx.$queryRaw`SELECT id FROM [dbo].[Cancha] WITH (UPDLOCK, ROWLOCK) WHERE id = ${canchaId}`;
+  },
+
+  /**
    * RF-09: cuenta las reservas activas que se cruzan con el rango y BLOQUEA ese rango
    * (UPDLOCK + HOLDLOCK) hasta que termine la transacción. Dos solicitudes simultáneas
    * por el mismo horario quedan en fila: la segunda ve la reserva de la primera.
