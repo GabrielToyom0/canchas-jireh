@@ -27,3 +27,12 @@ desktop.ini
 
 # Archivos temporales de Office
 ~$*
+
+# Prisma y archivos subidos (comprobantes de pago)
+**/generated/prisma/
+uploads/
+
+# Archivos de agentes de IA
+.agents/
+.claude/
+graphify-out/

@@ -1,0 +1,78 @@
+# Solo infraestructura (desarrollo):  npm run dev:infra
+# Sistema completo en contenedores:   npm run docker:up   (perfil "app")
+#   Sitio: http://localhost:8080 · Correos de prueba: http://localhost:8025
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: 'Y'
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Definir MSSQL_SA_PASSWORD en .env}
+    ports:
+      - '1433:1433'
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # La imagen de SQL Server no ejecuta scripts de inicio por sí sola:
+  # este contenedor corre db/init/*.sql una vez que el servidor está listo y termina.
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Definir MSSQL_SA_PASSWORD en .env}
+    volumes:
+      - ./db/init:/init:ro
+    entrypoint:
+      - /bin/bash
+      - -c
+      - for f in /init/*.sql; do /opt/mssql-tools18/bin/sqlcmd -C -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" -b -i "$$f" || exit 1; done
+    restart: 'no'
+
+  # Servidor SMTP de pruebas: atrapa los correos sin enviarlos.
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+
+  # Monolito: la API y el frontend compilado en un solo contenedor.
+  app:
+    build: .
+    image: ${REGISTRO:-local}/canchas-jireh:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    profiles: [app]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: sqlserver://sqlserver:1433;database=CanchasJirehDB;user=sa;password=${MSSQL_SA_PASSWORD};trustServerCertificate=true
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Definir JWT_ACCESS_SECRET en .env}
+      CORS_ORIGIN: ${APP_URL:-http://localhost:8080}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LIMITE_AUTH: ${LIMITE_AUTH:-20}
+      PROPIETARIO_CORREO: ${PROPIETARIO_CORREO:-}
+      PROPIETARIO_PASSWORD: ${PROPIETARIO_PASSWORD:-}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      UPLOADS_DIR: /app/backend/uploads
+    ports:
+      - '8080:3000'
+    volumes:
+      - comprobantes:/app/backend/uploads
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+
+volumes:
+  sqlserver-data:
+  comprobantes:
