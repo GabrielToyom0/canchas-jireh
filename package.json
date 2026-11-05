@@ -14,7 +14,7 @@
     "dev": "npm run preparar && concurrently -k -n api,web -c auto \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "dev:infra": "docker compose up -d sqlserver sqlserver-init mailpit",
     "db:migrate": "npm run db:migrate -w backend",
-    "db:seed": "npm run db:seed -w backend",
+    "db:seed": "npm run preparar && npm run db:seed -w backend",
     "lint": "eslint . && npm run lint -w frontend",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
